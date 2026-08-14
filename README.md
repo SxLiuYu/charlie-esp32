@@ -4,8 +4,8 @@
 
 | 版本 | 日期 | 说明 |
 |------|------|------|
-| v1.0.0 | 2026-08-14 | 初始固件（从原厂 patch，硬编码 IP/MQTT） |
-| **v1.1.0** | **2026-08-14** | **优化版：device_id、ping/pong、goodbye、MQTT fallback 本地化** |
+| v1.0.0 | 2026-08-14 | 初始固件（从原厂 patch） |
+| **v1.1.0** | **2026-08-14** | **优化版：device_id、ping/pong、goodbye、MQTT fallback** |
 
 ---
 
@@ -18,10 +18,10 @@
 | 固件版本 | xiaozhi v2.1.0 (优化版) |
 | ESP-IDF | v5.5.1 |
 | 板型 | lc-s3-wifi-1.54tft |
+| UUID | `909b14d1-...` |
 | NVS WiFi | `CMCC-egTm` / `fneme97c` ✅ |
 | NVS WebSocket | `ws://192.168.1.3:8000/ws/xiaozhi` ✅ |
 | NVS MQTT | **已清空** → 自动使用 Charlie fallback ✅ |
-| UUID | `909b14d1-...` ✅ |
 | 屏幕 | ST7789 240x240 SPI ✅ |
 
 ### v1.1.0 改进内容
@@ -31,26 +31,59 @@
 | 1 | **hello 含 device_id** | UUID 加入 hello JSON，Charlie 可跨重连识别设备 |
 | 2 | **ping/pong 心跳** | 每 30s 发送 ping，防止 NAT 超时断开 |
 | 3 | **goodbye 消息** | WebSocket 关闭时发送 goodbye，服务端及时清理会话 |
-| 4 | **MQTT 本地化** | NVS 中清空旧 MQTT 配置，固件自动使用 `192.168.1.12:1883` fallback |
+| 4 | **MQTT 本地化** | NVS 清空旧配置，固件自动使用 `192.168.1.12:1883` fallback |
 
 ---
 
-## 烧录 v1.1.0
+## 烧录（macOS 重要：ESP32-S3 原生 USB）
+
+> ⚠️ **LC-S3 使用 ESP32-S3 原生 USB，macOS 上必须手动进入下载模式！**
+
+### 方法一：命令行烧录（需手动操作）
 
 ```bash
-# 方法一：应用内烧录向导（推荐）
-# 启动 Charlie → 访问 http://localhost:8000/esp32-setup → 点「开始烧录」
+# 第 1 步：按住板子上的 BOOT 按钮不放
+# 第 2 步：插入 USB 数据线（或重新插入）
+# 第 3 步：等待 1 秒后松开 BOOT 按钮
+# 第 4 步：立即执行以下命令：
 
-# 方法二：命令行烧录（全量 16MB）
 python3 -m esptool --chip esp32s3 \
-  -p /dev/cu.usbmodem101 -b 115200 \
-  --before=default_reset --after=hard_reset \
-  write_flash \
-  --flash_mode dio --flash_freq 80m --flash_size 16MB \
+  --port /dev/cu.usbmodem101 \
+  --before=default-reset --after=hard-reset \
+  write-flash \
+  --flash-mode dio --flash-size 16MB --flash-freq 80m \
   0x0 flash_16MB_v1.1.0.bin
 ```
 
-### Mac 端 IP 别名（每次重启后执行）
+### 方法二：自动脚本（自动检测下载模式窗口）
+
+```bash
+# 使用 idf.py（对原生 USB 支持更好）
+export IDF_PATH=/Users/sxliuyu/esp-idf-v5.5.2
+export IDF_SKIP_CHECK_SUBMODULES=1
+cd /Users/sxliuyu/repos/xz
+
+# 先编译
+/Users/sxliuyu/.espressif/python_env/idf5.5_py3.14_env/bin/python \
+  /Users/sxliuyu/esp-idf-v5.5.2/tools/idf.py build
+
+# 然后按方法一的步骤，在 idf.py flash 前按住 BOOT
+/Users/sxliuyu/.espressif/python_env/idf5.5_py3.14_env/bin/python \
+  /Users/sxliuyu/esp-idf-v5.5.2/tools/idf.py \
+  -p /dev/cu.usbmodem101 \
+  flash
+```
+
+### 方法三：Charlie 应用内烧录（推荐）
+
+1. 启动 Charlie 应用
+2. 打开「ESP32 配置向导」（`http://localhost:8000/esp32-setup`）
+3. 点「检测串口」→ 选择 `/dev/cu.usbmodem101`
+4. 点「开始烧录」→ 按提示操作（按住 BOOT → 插 USB → 松开）
+
+---
+
+## Mac 端 IP 别名（每次重启后执行）
 
 ```bash
 IFACE=$(route get default 2>/dev/null | grep interface | head -1 | awk '{print $2}')
@@ -78,50 +111,12 @@ I Sent goodbye, session_id=xxx         ← 新增（对话结束时）
 
 ---
 
-## 从源码重新编译
-
-```bash
-export IDF_PATH=/Users/sxliuyu/esp-idf-v5.5.2
-export IDF_SKIP_CHECK_SUBMODULES=1
-cd /Users/sxliuyu/repos/xz
-
-# 构建（sdkconfig 已配置为 LC-S3 板型）
-/Users/sxliuyu/.espressif/python_env/idf5.5_py3.14_env/bin/python \
-  /Users/sxliuyu/esp-idf-v5.5.2/tools/idf.py build
-
-# 打包全量镜像（含 NVS 清理）
-python3 ../charlie-esp32/scripts/clean_nvs_mqtt.py \
-  flash_16MB_local.bin flash_16MB_v1.1.0_clean.bin
-
-python3 << 'EOF'
-import struct
-# 合并 bootloader + partition table + cleaned NVS + app + assets
-with open('build/bootloader/bootloader.bin','rb') as f: bt=f.read()
-with open('build/partition_table/partition-table.bin','rb') as f: pt=f.read()
-with open('build/ota_data_initial.bin','rb') as f: od=f.read()
-with open('build/xiaozhi.bin','rb') as f: app=f.read()
-with open('flash_16MB_v1.1.0_clean.bin','rb') as f: orig=f.read()
-img=bytearray(16*1024*1024)
-img[0:len(bt)]=bt
-img[0x8000:0x8000+len(pt)]=pt
-img[0x9000:0x9000+0x4000]=orig[0x9000:0xD000]
-img[0xD000:0xD000+len(od)]=od
-img[0xF000:0xF000+0x1000]=orig[0xF000:0x10000]
-img[0x20000:0x20000+len(app)]=app
-img[0x800000:0x800000+0x800000]=orig[0x800000:]
-open('flash_16MB_v1.1.0.bin','wb').write(img)
-print('✅ flash_16MB_v1.1.0.bin created')
-EOF
-```
-
----
-
 ## 分区布局
 
 | 分区 | 偏移 | 大小 | 说明 |
 |------|------|------|------|
 | bootloader | 0x0000 | 32KB | ESP-IDF bootloader |
-| nvs | 0x9000 | 16KB | WiFi/WebSocket/设备参数（v1.1.0 已清空 MQTT） |
+| nvs | 0x9000 | 16KB | WiFi/WebSocket/设备参数 |
 | otadata | 0xD000 | 8KB | OTA 切换标志 |
 | phy_init | 0xF000 | 4KB | 射频校准 |
 | ota_0 | 0x20000 | 4MB | 当前固件 |
@@ -130,19 +125,43 @@ EOF
 
 ---
 
-## 通信协议（v1.1.0）
+## 通信协议
 
-### WebSocket 默认通道
+### WebSocket（默认）
 - **URL**: `ws://<IP>:8000/ws/xiaozhi`
 - **Hello**: 含 `device_id`（UUID），用于设备级会话持久化
 - **心跳**: 每 30s ping，服务器回复 pong
 - **关闭**: 发送 goodbye + session_id
 
-### MQTT 备选通道（OTA 切换）
+### MQTT（备选，OTA 切换）
 - 固件 NVS 无 MQTT 配置时自动使用 Charlie fallback
 - **Endpoint**: `192.168.1.12:1883`（本地 Charlie MQTT broker）
 - **Topics**: `charlie/esp32/{uuid_short}/up` + `/down`
 - **音频**: UDP AES-CTR 加密 Opus
+
+---
+
+## macOS 烧录故障排查
+
+| 问题 | 原因 | 解决方案 |
+|------|------|----------|
+| `Failed to connect` | ESP32-S3 原生 USB 未进入下载模式 | **按住 BOOT 按钮 → 插 USB → 等 1 秒 → 松开 → 立即烧录** |
+| `No serial ports found` | 驱动问题 | `brew install wch-ch34x-usb-serial-driver` 后重启 |
+| 端口不存在 | USB 接触不良 | 换数据线（确保是数据线非充电线） |
+| 烧录后屏幕不亮 | 板型不匹配 | 确认使用 `lc-s3-wifi-1.54tft` 编译的固件 |
+| 连不上 Charlie | IP 别名未设置 | 执行上面的 IP 别名脚本 |
+
+---
+
+## 源码修改（v1.1.0）
+
+修改文件在 `/Users/sxliuyu/repos/xz`（xiaozhi-esp32 仓库）：
+
+| 文件 | 改动 |
+|------|------|
+| `main/protocols/websocket_protocol.h` | 新增 `esp_timer.h`、`ping_timer_`、`StartPingTimer/StopPingTimer` |
+| `main/protocols/websocket_protocol.cc` | hello 添加 `device_id`、30s ping 心跳、goodbye 消息 |
+| `main/protocols/mqtt_protocol.cc` | hello 添加 `device_id` |
 
 ---
 
@@ -152,3 +171,11 @@ EOF
 2. **不要 erase_flash** — 会清掉 WiFi 配置
 3. **MQTT fallback 优先** — NVS 清空后固件自动连接本地 Charlie
 4. **v1.0.0 → v1.1.0 升级** — 直接烧录全量镜像即可
+
+---
+
+## 参考
+
+- Charlie 服务端: https://github.com/SxLiuYu/charlie-voice-assistant
+- xz 固件源码: `/Users/sxliuyu/repos/xz` (xiaozhi-esp32)
+- 固件规格详情: [FIRMWARE_SPEC.md](FIRMWARE_SPEC.md)
